@@ -1,0 +1,13 @@
+version: '3.8'
+
+services:
+  etl-pipeline:
+    build: .
+    container_name: financial-etl-pipeline
+    env_file:
+      - .env
+    volumes:
+      # Mount the local directory to see the generated SQLite database and CSV on the host
+      - .:/app
+    # Override the CMD if we just want to run it via docker-compose up
+    command: python orchestrate.py

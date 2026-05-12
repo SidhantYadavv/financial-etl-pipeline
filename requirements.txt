@@ -1,0 +1,7 @@
+requests
+pandas
+python-dotenv
+psycopg2-binary
+nltk
+SQLAlchemy
+prefect
