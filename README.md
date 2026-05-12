@@ -1,10 +1,10 @@
-# 📊 Financial News ETL Pipeline
+# Financial News ETL Pipeline
 
 A production-grade Data Engineering pipeline that automates the extraction, transformation, and loading (ETL) of financial news data. The project features a modern React/Next.js dashboard to visualize market sentiment and trends.
 
 ---
 
-## 🚀 Overview
+## Overview
 
 This project implements an automated ETL workflow to monitor financial markets:
 1. **Extract**: Scrapes the latest financial news from various APIs/Sources.
@@ -14,7 +14,7 @@ This project implements an automated ETL workflow to monitor financial markets:
 
 ---
 
-## 🛠️ Tech Stack
+## Tech Stack
 
 - **Backend**: Python (pandas, SQLAlchemy, BeautifulSoup/NewsAPI)
 - **Database**: SQLite/PostgreSQL
@@ -24,7 +24,7 @@ This project implements an automated ETL workflow to monitor financial markets:
 
 ---
 
-## 📁 Project Structure
+## Project Structure
 
 - `extract.py`: Handles data retrieval from news sources.
 - `transform.py`: Cleans and enriches data (sentiment analysis, formatting).
@@ -35,7 +35,7 @@ This project implements an automated ETL workflow to monitor financial markets:
 
 ---
 
-## 🚦 Getting Started
+## Getting Started
 
 ### Prerequisites
 - Python 3.11+
@@ -70,4 +70,4 @@ This project implements an automated ETL workflow to monitor financial markets:
 
 ---
 
-Created with ❤️ by Sidhant Yadav
+Created by Sidhant Yadav
