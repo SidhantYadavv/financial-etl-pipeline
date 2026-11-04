@@ -1,9 +1,19 @@
-venv/
+# Secrets
 .env
+
+# Python
+.venv/
+venv/
 __pycache__/
+.pytest_cache/
+.ruff_cache/
+
+# Legacy pipeline artifacts
 *.db
-*.csv
-*.json
+raw_news_data.json
+cleaned_news_data.csv
+
+# OS / frontend
 .DS_Store
 node_modules/
 .next/

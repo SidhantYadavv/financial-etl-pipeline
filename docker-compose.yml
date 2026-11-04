@@ -1,13 +1,21 @@
-version: '3.8'
-
 services:
-  etl-pipeline:
-    build: .
-    container_name: financial-etl-pipeline
-    env_file:
-      - .env
+  postgres:
+    image: postgres:17
+    container_name: financial-etl-postgres
+    environment:
+      POSTGRES_USER: etl
+      POSTGRES_PASSWORD: etl
+      POSTGRES_DB: financial_news
+    ports:
+      - "5434:5432"
     volumes:
-      # Mount the local directory to see the generated SQLite database and CSV on the host
-      - .:/app
-    # Override the CMD if we just want to run it via docker-compose up
-    command: python orchestrate.py
+      - pgdata:/var/lib/postgresql/data
+      - ./docker/init-test-db.sql:/docker-entrypoint-initdb.d/init-test-db.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U etl -d financial_news"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  pgdata:
