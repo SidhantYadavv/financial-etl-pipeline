@@ -1,0 +1,11 @@
+.env
+.venv/
+venv/
+.git/
+**/__pycache__/
+.pytest_cache/
+.ruff_cache/
+frontend/
+*.db
+raw_news_data.json
+cleaned_news_data.csv
