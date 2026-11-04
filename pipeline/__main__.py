@@ -7,7 +7,6 @@ python -m pipeline serve      # long-running process that triggers the daily run
 
 import argparse
 import json
-import logging
 
 from pipeline.flow import etl_flow
 
@@ -19,9 +18,6 @@ def main() -> None:
     parser = argparse.ArgumentParser(prog="python -m pipeline")
     parser.add_argument("command", choices=["run", "backfill", "serve"])
     args = parser.parse_args()
-    logging.basicConfig(
-        level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s"
-    )
 
     if args.command == "serve":
         etl_flow.serve(name="daily", cron=DAILY_CRON, parameters={"mode": "daily"})
