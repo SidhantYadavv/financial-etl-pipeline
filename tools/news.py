@@ -8,6 +8,7 @@ from sqlalchemy import text
 
 from tools.common import (
     NEWS_DATE,
+    SAMPLE_CAVEAT,
     SENTIMENT_MODEL,
     all_tickers,
     article_source,
@@ -317,7 +318,7 @@ SENTIMENT_TREND = Tool(
         "`change` > 0 means sentiment is improving, and `direction` labels it "
         f"improving/worsening/flat (threshold {TREND_THRESHOLD}). Days without articles have "
         "avg_sentiment null. `sources` lists the most positive and most negative articles "
-        "in the period so you can cite what drove the trend."
+        "in the period so you can cite what drove the trend. " + SAMPLE_CAVEAT
     ),
     input_model=SentimentTrendInput,
     fn=sentiment_trend,

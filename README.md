@@ -29,7 +29,8 @@ This project implements an automated ETL workflow to monitor financial markets:
 pipeline/   extract, transform, load and the Prefect flow
 db/         SQLAlchemy models and Alembic migrations (incl. ticker seed)
 tests/      offline pytest suite (mocked APIs, real Postgres)
-tools/ agent/ api/ evals/   placeholders for later phases
+tools/      typed agent tools, registry and developer CLI
+agent/ api/ evals/   placeholders for later phases
 frontend/   Next.js dashboard
 ```
 
@@ -55,12 +56,12 @@ Every load uses `INSERT ... ON CONFLICT DO NOTHING` inside one transaction, so r
 
 ### Setup
 ```bash
-cp .env.example .env              # then add your NEWS_API_KEY
+cp .env.example .env              # then add NEWS_API_KEY and AGENT_READONLY_PASSWORD
 docker compose up -d              # Postgres 17 on localhost:5434
 python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements-dev.txt
 python -m nltk.downloader vader_lexicon
-alembic upgrade head              # create schema and seed tickers
+alembic upgrade head              # schema, ticker seed and the agent_readonly role
 ```
 
 On macOS with the python.org installer, run `Install Certificates.command` from the Python folder first if the NLTK download fails with `CERTIFICATE_VERIFY_FAILED`.
@@ -73,6 +74,23 @@ python -m pipeline serve      # stay running and trigger the daily run at 11:00 
 ```
 
 The NewsAPI free tier allows 100 requests per day and only the last month of articles. `NEWS_API_REQUEST_BUDGET` caps the requests a single run may make; anything over budget is logged as skipped.
+
+### Agent tools
+Seven tools the research agent will call: `list_tickers`, `search_news`, `sentiment_trend`,
+`price_history`, `compare_tickers`, `run_sql` and `web_search` (a stub until a provider is chosen).
+Every call returns `{"ok": true, "data", "as_of", "sources"}` or `{"ok": false, "error"}`, and
+date windows such as "last 7 days" end at the latest date in the database, not today.
+
+```bash
+python -m tools --list                                            # every tool's JSON Schema
+python -m tools sentiment_trend --json '{"ticker": "NVDA", "days": 7}'
+python -m tools run_sql --json '{"query": "SELECT count(*) FROM articles"}'
+```
+
+All tools connect as the `agent_readonly` Postgres role (SELECT on the five data tables only,
+read-only transactions, 3s statement timeout). `run_sql` additionally parses each query with
+Postgres' own grammar and only runs a single SELECT over allowlisted tables and functions,
+capped at 200 rows.
 
 ### Tests and lint
 ```bash

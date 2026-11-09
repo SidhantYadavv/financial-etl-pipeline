@@ -16,6 +16,10 @@ MARKET_TZ = "America/New_York"
 SENTIMENT_MODEL = "vader"
 NEWS_DATE = f"(a.published_at AT TIME ZONE '{MARKET_TZ}')::date"
 NO_DATA_HINT = "Run `python -m pipeline backfill` to load data."
+SAMPLE_CAVEAT = (
+    "Article counts are a sample of coverage (the news API returns at most 100 articles "
+    "per request), not total news volume, so do not read busy or quiet days as news flow."
+)
 
 _COMPANY_SUFFIX = re.compile(
     r"^the\s+|,?\s+(inc|corp|corporation|company|co|group|platforms)\.?$|\s+&\s+co\.?$",

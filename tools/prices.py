@@ -6,6 +6,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import Connection, text
 
 from tools.common import (
+    SAMPLE_CAVEAT,
     SENTIMENT_MODEL,
     article_source,
     calendar_window,
@@ -231,7 +232,7 @@ COMPARE_TICKERS = Tool(
         "latest price date, applied to both prices and news so they line up; news published "
         "after the last completed session is not counted. Price change runs from the close "
         "before the window to the last close in it. `sources` holds each ticker's most "
-        "positive and most negative article in the window."
+        "positive and most negative article in the window. " + SAMPLE_CAVEAT
     ),
     input_model=CompareTickersInput,
     fn=compare_tickers,
