@@ -43,7 +43,14 @@ def test_windows_follow_daylight_saving_changes(day: date, hours: int) -> None:
 
 @pytest.mark.parametrize(
     ("returned", "total", "capped"),
-    [(100, 100, True), (100, 412, True), (37, 37, False), (0, 0, False), (99, 120, True)],
+    [
+        (100, 100, True),
+        (100, 412, True),
+        (99, 120, True),
+        (37, 37, False),
+        (0, 0, False),
+        (72, 73, False),  # NewsAPI's total is a little high, but the page was not full
+    ],
 )
 def test_capped_windows(returned: int, total: int, capped: bool) -> None:
     window = FetchedWindow(NewsRequest("NVDA", date(2026, 10, 27)), returned, total)

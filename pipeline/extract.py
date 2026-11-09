@@ -50,9 +50,9 @@ class FetchedWindow:
 
     @property
     def capped(self) -> bool:
-        return self.articles_returned >= NEWS_API_PAGE_SIZE or (
-            self.total_results > self.articles_returned
-        )
+        # Compare with the page size, not `returned`: totalResults often runs one or two
+        # above what NewsAPI actually returns (removed or duplicate articles).
+        return max(self.articles_returned, self.total_results) >= NEWS_API_PAGE_SIZE
 
 
 @dataclass
