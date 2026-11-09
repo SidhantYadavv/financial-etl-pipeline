@@ -28,6 +28,7 @@ jobs:
       DATABASE_URL: postgresql+psycopg://etl:etl@localhost:5434/financial_news_test
       TEST_DATABASE_URL: postgresql+psycopg://etl:etl@localhost:5434/financial_news_test
       NEWS_API_KEY: ci-placeholder
+      AGENT_READONLY_PASSWORD: ci-agent-readonly-password
 
     steps:
       - uses: actions/checkout@v4

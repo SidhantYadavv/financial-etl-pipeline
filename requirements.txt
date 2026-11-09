@@ -1,8 +1,10 @@
 alembic>=1.13,<2
 nltk>=3.9,<4
 pandas>=2.2,<4
+pglast>=7,<8
 prefect>=3.0,<4
 psycopg[binary]>=3.2,<4
+pydantic>=2.7,<3
 python-dotenv>=1.0,<2
 requests>=2.32,<3
 sqlalchemy>=2.0,<3

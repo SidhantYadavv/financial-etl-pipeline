@@ -14,10 +14,14 @@ from sqlalchemy import Engine, create_engine, text
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_TEST_URL = "postgresql+psycopg://etl:etl@localhost:5434/financial_news_test"
 
+# The read-only role is shared by every database in the cluster, so reuse the dev
+# password when there is one; otherwise (CI) fall back to a fixed test value.
+load_dotenv(ROOT / ".env")
+os.environ.setdefault("AGENT_READONLY_PASSWORD", "agent-readonly-test-password")
+
 
 @pytest.fixture(scope="session")
 def test_database_url() -> str:
-    load_dotenv(ROOT / ".env")
     return os.getenv("TEST_DATABASE_URL", DEFAULT_TEST_URL)
 
 
