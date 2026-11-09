@@ -84,3 +84,21 @@ def news_article(
         "publishedAt": published_at,
         "content": None,
     }
+
+
+@pytest.fixture(scope="module")
+def tools_db(migrated_engine: Engine, test_database_url: str) -> Iterator[Engine]:
+    """Seed tool fixture data and point the tools at the test database for one module."""
+    from tests.tool_data import seed_tool_data
+
+    seed_tool_data(migrated_engine)
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setenv("DATABASE_URL", test_database_url)
+        yield migrated_engine
+
+
+@pytest.fixture(scope="module")
+def registry() -> Any:
+    from tools import default_registry
+
+    return default_registry()
