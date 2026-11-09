@@ -43,16 +43,19 @@ def migrated_engine(test_database_url: str) -> Iterator[Engine]:
 
 @pytest.fixture
 def db(migrated_engine: Engine) -> Engine:
-    """Empty data tables (seeded tickers are kept) before each test."""
+    """Empty data tables and the fetch log (seeded tickers are kept) before each test."""
     with migrated_engine.begin() as conn:
         conn.execute(
-            text("TRUNCATE articles, article_tickers, sentiment, daily_prices RESTART IDENTITY")
+            text(
+                "TRUNCATE articles, article_tickers, sentiment, daily_prices, fetch_log "
+                "RESTART IDENTITY"
+            )
         )
     return migrated_engine
 
 
 def count_rows(engine: Engine) -> dict[str, int]:
-    tables = ["tickers", "articles", "article_tickers", "sentiment", "daily_prices"]
+    tables = ["tickers", "articles", "article_tickers", "sentiment", "daily_prices", "fetch_log"]
     with engine.connect() as conn:
         return {t: conn.execute(text(f"SELECT count(*) FROM {t}")).scalar_one() for t in tables}
 

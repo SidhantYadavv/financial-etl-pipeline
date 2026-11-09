@@ -2,7 +2,7 @@
 
 import logging
 from dataclasses import dataclass, field
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, date, datetime, time, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -20,18 +20,46 @@ MARKET_TZ = ZoneInfo("America/New_York")
 
 @dataclass(frozen=True)
 class NewsRequest:
+    """One ticker, one New York calendar day. Small windows keep each day's articles
+    from being crowded out by busier days in the same request."""
+
     symbol: str
-    start: datetime
-    end: datetime
+    day: date
+
+    @property
+    def start(self) -> datetime:
+        return datetime.combine(self.day, time.min, tzinfo=MARKET_TZ).astimezone(UTC)
+
+    @property
+    def end(self) -> datetime:
+        """Start of the next day (exclusive), in UTC so 23- and 25-hour DST days are exact."""
+        next_day = self.day + timedelta(days=1)
+        return datetime.combine(next_day, time.min, tzinfo=MARKET_TZ).astimezone(UTC)
 
     def __str__(self) -> str:
-        return f"{self.symbol} {self.start:%Y-%m-%d %H:%M}..{self.end:%Y-%m-%d %H:%M}"
+        return f"{self.symbol} {self.day}"
+
+
+@dataclass(frozen=True)
+class FetchedWindow:
+    """A request that NewsAPI answered, with enough detail to tell a full day from a sample."""
+
+    request: NewsRequest
+    articles_returned: int
+    total_results: int
+
+    @property
+    def capped(self) -> bool:
+        return self.articles_returned >= NEWS_API_PAGE_SIZE or (
+            self.total_results > self.articles_returned
+        )
 
 
 @dataclass
 class NewsResult:
     articles: list[dict[str, Any]] = field(default_factory=list)
     requests_made: int = 0
+    fetched: list[FetchedWindow] = field(default_factory=list)
     failed: list[NewsRequest] = field(default_factory=list)
     skipped: list[NewsRequest] = field(default_factory=list)
 
@@ -49,23 +77,6 @@ class PriceBar:
 
 def build_query(aliases: list[str]) -> str:
     return " OR ".join(f'"{alias}"' for alias in aliases)
-
-
-def plan_news_requests(
-    symbols: list[str], end: datetime, days: int, windows: int
-) -> list[NewsRequest]:
-    """Split the last `days` into `windows` slices per symbol.
-
-    Requests are ordered newest window first across all symbols, so if the budget
-    runs out we lose the oldest news rather than whole tickers.
-    """
-    days = min(days, NEWS_API_MAX_DAYS)
-    step = timedelta(days=days) / windows
-    plan = []
-    for i in range(windows):
-        window_end = end - step * i
-        plan.extend(NewsRequest(s, window_end - step, window_end) for s in symbols)
-    return plan
 
 
 def fetch_news(
@@ -88,7 +99,8 @@ def fetch_news(
                     "q": build_query(aliases_by_symbol[req.symbol]),
                     "searchIn": "title,description",
                     "from": _isoformat(req.start),
-                    "to": _isoformat(req.end),
+                    # `to` is inclusive; stop one second before the next day starts.
+                    "to": _isoformat(req.end - timedelta(seconds=1)),
                     "language": "en",
                     "sortBy": "publishedAt",
                     "pageSize": NEWS_API_PAGE_SIZE,
@@ -119,7 +131,12 @@ def fetch_news(
             result.failed.append(req)
             continue
 
-        result.articles.extend(body.get("articles") or [])
+        articles = body.get("articles") or []
+        result.articles.extend(articles)
+        total = body.get("totalResults")
+        result.fetched.append(
+            FetchedWindow(req, len(articles), total if isinstance(total, int) else len(articles))
+        )
 
     if result.skipped:
         logger.warning(

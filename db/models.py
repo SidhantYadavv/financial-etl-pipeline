@@ -4,12 +4,15 @@ from datetime import date, datetime
 
 from sqlalchemy import (
     BigInteger,
+    Boolean,
+    Computed,
     Date,
     DateTime,
     Float,
     ForeignKey,
     Identity,
     Index,
+    Integer,
     String,
     Text,
     func,
@@ -76,3 +79,25 @@ class DailyPrice(Base):
     low: Mapped[float] = mapped_column(Float)
     close: Mapped[float] = mapped_column(Float)
     volume: Mapped[int] = mapped_column(BigInteger)
+
+
+class FetchLog(Base):
+    """One NewsAPI request covering one ticker and one New York calendar day."""
+
+    __tablename__ = "fetch_log"
+
+    symbol: Mapped[str] = mapped_column(ForeignKey("tickers.symbol"), primary_key=True)
+    day: Mapped[date] = mapped_column(Date, primary_key=True)
+    fetched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    articles_returned: Mapped[int] = mapped_column(Integer)
+    total_results: Mapped[int] = mapped_column(Integer)
+    capped: Mapped[bool] = mapped_column(Boolean)
+    settled: Mapped[bool] = mapped_column(Boolean)
+    status: Mapped[str] = mapped_column(
+        Text,
+        Computed(
+            "CASE WHEN NOT settled THEN 'provisional' WHEN capped THEN 'capped' "
+            "ELSE 'complete' END",
+            persisted=True,
+        ),
+    )

@@ -1,6 +1,7 @@
 """End-to-end flow runs with NewsAPI and yfinance mocked and a real Postgres database."""
 
 from collections.abc import Iterator
+from datetime import UTC, date, datetime, timedelta
 from typing import Any
 from urllib.parse import quote
 
@@ -8,9 +9,11 @@ import pandas as pd
 import pytest
 import requests
 from prefect.testing.utilities import prefect_test_harness
-from sqlalchemy import Engine
+from sqlalchemy import Engine, text
 
 from pipeline import extract
+from pipeline.coverage import fetchable_days
+from pipeline.extract import MARKET_TZ
 from pipeline.flow import etl_flow
 from tests.conftest import FakeResponse, count_rows, news_article
 
@@ -29,17 +32,34 @@ def env(monkeypatch: pytest.MonkeyPatch, test_database_url: str, db: Engine) -> 
     return db
 
 
-def fake_news_get(url: str, params: dict[str, Any], **kwargs: Any) -> FakeResponse:
-    """Two articles per request; one of them is shared by every request."""
-    first_alias = params["q"].split('"')[1]
-    day = params["from"][:10]  # stable across two runs made seconds apart
-    unique = news_article(
-        f"{first_alias} shares rise on strong results",
-        f"https://news.test/{quote(first_alias)}/{day}",
-        published_at=f"{day}T12:00:00Z",
-    )
-    shared = news_article("Nvidia and Apple lead tech rally", "https://news.test/shared")
-    return FakeResponse(200, {"status": "ok", "totalResults": 2, "articles": [unique, shared]})
+class FakeNewsApi:
+    """One article per (alias, day) request, plus one article shared by every request.
+
+    Requests for `capped_symbol` report more results than one page holds.
+    """
+
+    def __init__(self, rate_limit_after: int | None = None) -> None:
+        self.calls: list[tuple[str, date]] = []
+        self.rate_limit_after = rate_limit_after
+        self.capped_symbol = "Nvidia"
+
+    def get(self, url: str, params: dict[str, Any], **kwargs: Any) -> FakeResponse:
+        if self.rate_limit_after is not None and len(self.calls) >= self.rate_limit_after:
+            return FakeResponse(429, {"status": "error", "code": "rateLimited"})
+        first_alias = params["q"].split('"')[1]
+        start = datetime.fromisoformat(params["from"]).replace(tzinfo=UTC)
+        day = start.astimezone(MARKET_TZ).date()
+        self.calls.append((first_alias, day))
+        unique = news_article(
+            f"{first_alias} shares rise on strong results",
+            f"https://news.test/{quote(first_alias)}/{day}",
+            published_at=f"{(start + timedelta(hours=15)).isoformat()}",
+        )
+        shared = news_article("Nvidia and Apple lead tech rally", "https://news.test/shared")
+        total = 250 if first_alias == self.capped_symbol else 2
+        return FakeResponse(
+            200, {"status": "ok", "totalResults": total, "articles": [unique, shared]}
+        )
 
 
 class FakeTicker:
@@ -57,36 +77,89 @@ class FakeTicker:
 
 
 @pytest.fixture
-def mocked_sources(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(extract.requests, "get", fake_news_get)
+def api(monkeypatch: pytest.MonkeyPatch) -> FakeNewsApi:
+    fake = FakeNewsApi()
+    monkeypatch.setattr(extract.requests, "get", fake.get)
     monkeypatch.setattr(extract.yf, "Ticker", FakeTicker)
+    return fake
 
 
-@pytest.mark.usefixtures("mocked_sources")
-def test_backfill_twice_adds_no_duplicates(env: Engine) -> None:
-    first = etl_flow(mode="backfill")
+def fetch_log(engine: Engine) -> dict[tuple[str, date], str]:
+    with engine.connect() as conn:
+        return dict(
+            ((symbol, day), status)
+            for symbol, day, status in conn.execute(
+                text("SELECT symbol, day, status FROM fetch_log")
+            )
+        )
+
+
+def test_run_spends_the_budget_on_the_newest_missing_days(env: Engine, api: FakeNewsApi) -> None:
+    summary = etl_flow(mode="daily")
+
+    days = fetchable_days(datetime.now(UTC))
+    assert summary["news_requests"] == 80  # the whole budget, no more
+    assert len(api.calls) == 80
+    # 20 tickers x the 4 newest days, newest day first.
+    assert sorted({d for _, d in api.calls}, reverse=True) == days[:4]
+    assert api.calls[0][1] == days[0]
+    # The newest day's 20 windows are provisional and still to be refetched.
+    assert summary["news_windows_remaining"] == 20 * len(days) - 80 + 20
+    logged = fetch_log(env)
+    assert len(logged) == 80
+    assert summary["inserted"]["fetch_log"] == 80
+    assert count_rows(env)["articles"] == 81  # 80 unique + 1 shared
+
+
+def test_next_run_resumes_where_the_last_one_stopped(
+    env: Engine, api: FakeNewsApi, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("NEWS_API_REQUEST_BUDGET", "30")
+    first = etl_flow(mode="daily")
+    first_calls = list(api.calls)
     after_first = count_rows(env)
 
-    second = etl_flow(mode="backfill")
+    second = etl_flow(mode="daily")
+    second_calls = api.calls[len(first_calls) :]
 
-    assert first["news_requests"] == 80  # 20 tickers x 4 windows fits the budget
-    assert first["news_requests_skipped"] == []
-    assert after_first["articles"] == 81  # 80 unique + 1 shared
-    assert after_first["sentiment"] == 81
-    assert after_first["daily_prices"] > 0
-    assert set(second["inserted"].values()) == {0}
-    assert count_rows(env) == after_first
+    assert len(first_calls) == len(second_calls) == 30
+    assert not set(first_calls) & set(second_calls)  # nothing fetched twice
+    days = fetchable_days(datetime.now(UTC))
+    # Newest day for all 20 tickers, then the next day for the rest.
+    assert sorted({d for _, d in first_calls + second_calls}, reverse=True) == days[:3]
+    assert second["news_windows_remaining"] == first["news_windows_remaining"] - 30
+    assert len(fetch_log(env)) == 60
+    assert count_rows(env)["articles"] == after_first["articles"] + 30  # shared one not repeated
 
 
-@pytest.mark.usefixtures("mocked_sources")
-def test_small_budget_skips_oldest_windows(env: Engine, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("NEWS_API_REQUEST_BUDGET", "30")
+def test_rate_limited_run_logs_only_what_it_fetched(
+    env: Engine, api: FakeNewsApi, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    api.rate_limit_after = 12
+    summary = etl_flow(mode="daily")
 
-    summary = etl_flow(mode="backfill")
+    assert summary["news_requests"] == 13  # the 13th request was refused
+    assert len(summary["news_requests_skipped"]) == 80 - 12
+    assert len(fetch_log(env)) == 12
 
-    # 30 // 20 tickers = 1 window each; 20 requests made, nothing skipped.
-    assert summary["news_requests"] == 20
-    assert summary["news_requests_skipped"] == []
+    api.rate_limit_after = None
+    monkeypatch.setenv("NEWS_API_REQUEST_BUDGET", "10")
+    etl_flow(mode="daily")
+    resumed = api.calls[12:]
+    assert len(resumed) == 10
+    assert not set(api.calls[:12]) & set(resumed)
+    assert len(fetch_log(env)) == 22
+
+
+def test_capped_and_provisional_days_are_recorded(env: Engine, api: FakeNewsApi) -> None:
+    etl_flow(mode="daily")
+
+    logged = fetch_log(env)
+    newest = fetchable_days(datetime.now(UTC))[0]
+    # Yesterday is still inside NewsAPI's 24h delay, so it will be fetched again.
+    assert logged[("AAPL", newest)] == "provisional"
+    assert {s for (sym, d), s in logged.items() if sym == "NVDA" and d < newest} == {"capped"}
+    assert {s for (sym, d), s in logged.items() if sym == "AAPL" and d < newest} == {"complete"}
 
 
 def test_failed_news_api_does_not_crash_the_run(
@@ -100,6 +173,7 @@ def test_failed_news_api_does_not_crash_the_run(
 
     summary = etl_flow(mode="daily")
 
-    assert len(summary["news_requests_failed"]) == 20
+    assert len(summary["news_requests_failed"]) == 80
     assert summary["inserted"]["articles"] == 0
+    assert summary["inserted"]["fetch_log"] == 0  # failed windows stay missing
     assert summary["inserted"]["daily_prices"] > 0  # prices still load

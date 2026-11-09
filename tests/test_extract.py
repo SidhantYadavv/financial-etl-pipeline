@@ -7,11 +7,11 @@ import requests
 
 from pipeline import extract
 from pipeline.extract import (
+    FetchedWindow,
     NewsRequest,
     build_query,
     fetch_news,
     fetch_prices,
-    plan_news_requests,
 )
 from tests.conftest import FakeResponse, news_article
 
@@ -23,14 +23,31 @@ def test_build_query_quotes_each_alias() -> None:
     assert build_query(["Nvidia", "NVDA"]) == '"Nvidia" OR "NVDA"'
 
 
-def test_plan_orders_newest_window_first_and_caps_history() -> None:
-    plan = plan_news_requests(["NVDA", "AAPL"], end=NOW, days=60, windows=3)
+def test_window_is_one_new_york_day() -> None:
+    request = NewsRequest("NVDA", date(2026, 10, 27))
 
-    assert len(plan) == 6
-    assert [r.symbol for r in plan[:2]] == ["NVDA", "AAPL"]
-    assert plan[0].end == NOW
-    assert plan[-1].start == NOW - timedelta(days=extract.NEWS_API_MAX_DAYS)
-    assert plan[0].start == plan[2].end  # windows are contiguous
+    assert request.start == datetime(2026, 10, 27, 4, tzinfo=UTC)  # midnight EDT
+    assert request.end == datetime(2026, 10, 28, 4, tzinfo=UTC)
+    assert str(request) == "NVDA 2026-10-27"
+
+
+@pytest.mark.parametrize(
+    ("day", "hours"),
+    [(date(2026, 3, 8), 23), (date(2026, 11, 1), 25), (date(2026, 11, 2), 24)],
+)
+def test_windows_follow_daylight_saving_changes(day: date, hours: int) -> None:
+    request = NewsRequest("NVDA", day)
+    assert request.end - request.start == timedelta(hours=hours)
+    assert NewsRequest("NVDA", day + timedelta(days=1)).start == request.end  # contiguous
+
+
+@pytest.mark.parametrize(
+    ("returned", "total", "capped"),
+    [(100, 100, True), (100, 412, True), (37, 37, False), (0, 0, False), (99, 120, True)],
+)
+def test_capped_windows(returned: int, total: int, capped: bool) -> None:
+    window = FetchedWindow(NewsRequest("NVDA", date(2026, 10, 27)), returned, total)
+    assert window.capped is capped
 
 
 class FakeNewsApi:
@@ -56,7 +73,9 @@ def api(monkeypatch: pytest.MonkeyPatch) -> FakeNewsApi:
 
 
 def _plan(n: int) -> list[NewsRequest]:
-    return plan_news_requests(["NVDA", "AAPL"], end=NOW, days=10, windows=n)
+    """n days for NVDA and AAPL, newest first."""
+    days = [date(2026, 11, 2) - timedelta(days=i) for i in range(n)]
+    return [NewsRequest(s, d) for d in days for s in ("NVDA", "AAPL")]
 
 
 def test_fetch_news_collects_articles_and_sends_key_in_header(api: FakeNewsApi) -> None:
@@ -70,6 +89,25 @@ def test_fetch_news_collects_articles_and_sends_key_in_header(api: FakeNewsApi) 
     assert api.calls[0]["headers"] == {"X-Api-Key": "secret"}
     assert "secret" not in str(api.calls[0]["params"])
     assert api.calls[0]["params"]["q"] == '"Nvidia" OR "NVDA"'
+    # 2026-11-02 in New York, in UTC, with an inclusive `to`.
+    assert api.calls[0]["params"]["from"] == "2026-11-02T05:00:00"
+    assert api.calls[0]["params"]["to"] == "2026-11-03T04:59:59"
+
+
+def test_fetch_news_records_what_each_window_returned(api: FakeNewsApi) -> None:
+    full = [news_article(f"Nvidia {i}", f"https://n/{i}") for i in range(100)]
+    api.responses.extend(
+        [
+            FakeResponse(200, {"status": "ok", "totalResults": 431, "articles": full}),
+            FakeResponse(200, {"status": "ok", "totalResults": 2, "articles": full[:2]}),
+        ]
+    )
+
+    result = fetch_news(_plan(1), ALIASES, "key", budget=10)
+
+    nvda, aapl = result.fetched
+    assert (nvda.request.symbol, nvda.articles_returned, nvda.total_results) == ("NVDA", 100, 431)
+    assert nvda.capped and not aapl.capped
 
 
 def test_fetch_news_stops_at_budget_and_reports_skipped(api: FakeNewsApi) -> None:
@@ -114,6 +152,8 @@ def test_fetch_news_survives_failed_and_empty_responses(api: FakeNewsApi) -> Non
     assert len(result.failed) == 4
     assert [a["url"] for a in result.articles] == ["https://b"]
     assert result.skipped == []
+    # Only answered requests count as fetched; failed windows stay unfetched.
+    assert [f.articles_returned for f in result.fetched] == [0, 1]
 
 
 def _frame(days: list[str], tz: str = "America/New_York") -> pd.DataFrame:

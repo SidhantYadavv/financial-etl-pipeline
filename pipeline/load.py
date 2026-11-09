@@ -1,16 +1,28 @@
-"""Idempotent loading into Postgres: every insert is ON CONFLICT DO NOTHING."""
+"""Idempotent loading into Postgres.
+
+Data rows are ON CONFLICT DO NOTHING; fetch_log rows are upserted so a refetch of a
+provisional day replaces it.
+"""
 
 import logging
 from collections.abc import Sequence
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import Connection, Engine, select
+from sqlalchemy import Connection, Engine, delete, select, tuple_
 from sqlalchemy.dialects.postgresql import insert
 
 from db.models import Article, ArticleTicker, Base, DailyPrice, Sentiment, Ticker
-from pipeline.extract import PriceBar
-from pipeline.transform import SENTIMENT_MODEL, CleanArticle
+from pipeline.coverage import record_fetches
+from pipeline.extract import FetchedWindow, PriceBar
+from pipeline.transform import (
+    SENTIMENT_MODEL,
+    CleanArticle,
+    compile_alias_patterns,
+    is_blocked_source,
+    match_tickers,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -23,16 +35,31 @@ class LoadStats:
     article_tickers: int = 0
     sentiment: int = 0
     daily_prices: int = 0
+    fetch_log: int = 0
 
 
 def load_tickers(engine: Engine) -> dict[str, list[str]]:
     with engine.connect() as conn:
-        rows = conn.execute(select(Ticker.symbol, Ticker.aliases).order_by(Ticker.symbol))
-        return {symbol: list(aliases) for symbol, aliases in rows}
+        return load_tickers_conn(conn)
 
 
-def load(engine: Engine, articles: Sequence[CleanArticle], prices: Sequence[PriceBar]) -> LoadStats:
-    """Write one run's data in a single transaction. Re-running never duplicates rows."""
+def load_tickers_conn(conn: Connection) -> dict[str, list[str]]:
+    rows = conn.execute(select(Ticker.symbol, Ticker.aliases).order_by(Ticker.symbol))
+    return {symbol: list(aliases) for symbol, aliases in rows}
+
+
+def load(
+    engine: Engine,
+    articles: Sequence[CleanArticle],
+    prices: Sequence[PriceBar],
+    fetched: Sequence[FetchedWindow] = (),
+    fetched_at: datetime | None = None,
+) -> LoadStats:
+    """Write one run's data in a single transaction. Re-running never duplicates rows.
+
+    A window is logged as fetched only in the transaction that stores its articles, so
+    a run that dies before loading leaves those windows to be fetched again.
+    """
     stats = LoadStats()
     with engine.begin() as conn:
         stats.articles = _insert_ignore(
@@ -90,6 +117,7 @@ def load(engine: Engine, articles: Sequence[CleanArticle], prices: Sequence[Pric
                 for p in prices
             ],
         )
+        stats.fetch_log = record_fetches(conn, fetched, fetched_at or datetime.now(UTC))
     logger.info("Load: inserted %s", stats)
     return stats
 
@@ -112,3 +140,51 @@ def _article_ids(conn: Connection, urls: list[str]) -> dict[str, int]:
         rows = conn.execute(select(Article.url, Article.id).where(Article.url.in_(chunk)))
         ids.update({url: article_id for url, article_id in rows})
     return ids
+
+
+@dataclass
+class RematchStats:
+    articles: int = 0
+    links_before: int = 0
+    links_removed: int = 0
+
+
+def rematch_articles(engine: Engine) -> RematchStats:
+    """Re-apply the current matching rules and source blocklist to stored articles.
+
+    Only removes ticker links: articles and their sentiment stay, so the links can be
+    rebuilt from the stored text if the rules change again.
+    """
+    stats = RematchStats()
+    with engine.begin() as conn:
+        patterns = compile_alias_patterns(load_tickers_conn(conn))
+        links: dict[int, set[str]] = {}
+        for article_id, symbol in conn.execute(
+            select(ArticleTicker.article_id, ArticleTicker.symbol)
+        ):
+            links.setdefault(article_id, set()).add(symbol)
+        stats.links_before = sum(len(s) for s in links.values())
+
+        stale: list[tuple[int, str]] = []
+        rows = conn.execute(
+            select(Article.id, Article.title, Article.description, Article.source, Article.url)
+        )
+        for article_id, title, description, source, url in rows:
+            stats.articles += 1
+            keep = (
+                set()
+                if is_blocked_source(source, url)
+                else match_tickers(title, description, patterns)
+            )
+            stale.extend((article_id, s) for s in links.get(article_id, set()) - keep)
+
+        for start in range(0, len(stale), CHUNK_SIZE):
+            chunk = stale[start : start + CHUNK_SIZE]
+            conn.execute(
+                delete(ArticleTicker).where(
+                    tuple_(ArticleTicker.article_id, ArticleTicker.symbol).in_(chunk)
+                )
+            )
+        stats.links_removed = len(stale)
+    logger.info("Rematch: %s", stats)
+    return stats
