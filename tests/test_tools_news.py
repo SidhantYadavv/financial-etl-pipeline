@@ -170,7 +170,47 @@ def test_sentiment_trend_last_7_days_is_anchored_to_the_data(registry: ToolRegis
         "articles": 3,
         "positive": 2,
         "negative": 0,
+        "fetch": "provisional",
     }
+
+
+def test_sentiment_trend_reports_coverage(registry: ToolRegistry) -> None:
+    data = registry.call("sentiment_trend", {"ticker": "NVDA", "days": 30})["data"]
+
+    assert data["coverage"] == {
+        "days": 30,
+        "days_with_articles": 30,
+        "complete_days": 27,
+        "capped_days": ["2026-06-29"],
+        "incomplete_days": ["2026-06-10", "2026-06-30"],
+        "complete": False,
+    }
+    statuses = {d["date"]: d["fetch"] for d in data["daily"]}
+    assert statuses["2026-06-10"] == "not_fetched"
+    assert statuses["2026-06-29"] == "capped"
+    assert statuses["2026-06-01"] == "complete"
+    incomplete, capped = data["warnings"]
+    assert incomplete.startswith(
+        "NVDA: 2 of 30 days were not fully fetched (2026-06-10, 2026-06-30)"
+    )
+    assert "tentative" in incomplete
+    assert capped.startswith("NVDA: 1 days hit the 100-article limit (2026-06-29)")
+
+
+def test_sentiment_trend_with_full_coverage_has_no_warnings(registry: ToolRegistry) -> None:
+    data = registry.call("sentiment_trend", {"ticker": "AMD", "days": 30})["data"]
+    assert data["coverage"]["complete"] is True
+    assert data["coverage"]["complete_days"] == 30
+    assert data["coverage"]["days_with_articles"] == 5  # quiet days were fetched, not missed
+    assert data["warnings"] == []
+
+
+def test_sentiment_trend_on_never_fetched_days_says_so(registry: ToolRegistry) -> None:
+    data = registry.call("sentiment_trend", {"ticker": "AAPL", "days": 30})["data"]
+    assert data["coverage"]["complete_days"] == 0
+    assert len(data["coverage"]["incomplete_days"]) == 30
+    assert "30 of 30 days were not fully fetched" in data["warnings"][0]
+    assert "and 20 more" in data["warnings"][0]  # long date lists are shortened
 
 
 def test_sentiment_trend_cites_extreme_articles(registry: ToolRegistry) -> None:

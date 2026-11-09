@@ -81,6 +81,19 @@ def _label(score: float) -> str:
     return "positive" if score >= 0.05 else "negative" if score <= -0.05 else "neutral"
 
 
+def _fetch_log() -> list[dict]:
+    """NVDA: complete except June 10 (never fetched), June 29 (capped) and June 30
+    (provisional). AMD: every day complete, including its quiet days. AAPL: never fetched."""
+    rows = []
+    for i in range(30):
+        day = NEWS_START + timedelta(days=i)
+        if day.day != 10:
+            capped, settled = day.day == 29, day.day != 30
+            rows.append({"symbol": "NVDA", "day": day, "capped": capped, "settled": settled})
+        rows.append({"symbol": "AMD", "day": day, "capped": False, "settled": True})
+    return rows
+
+
 def nvda_close(index: int) -> float:
     return 100.0 + index
 
@@ -88,7 +101,18 @@ def nvda_close(index: int) -> float:
 def seed_tool_data(engine: Engine) -> None:
     with engine.begin() as conn:
         conn.execute(
-            text("TRUNCATE articles, article_tickers, sentiment, daily_prices RESTART IDENTITY")
+            text(
+                "TRUNCATE articles, article_tickers, sentiment, daily_prices, fetch_log "
+                "RESTART IDENTITY"
+            )
+        )
+        conn.execute(
+            text(
+                "INSERT INTO fetch_log (symbol, day, fetched_at, articles_returned, "
+                "total_results, capped, settled) "
+                "VALUES (:symbol, :day, '2026-07-02', 1, 1, :capped, :settled)"
+            ),
+            _fetch_log(),
         )
         for row in _articles():
             article_id = conn.execute(

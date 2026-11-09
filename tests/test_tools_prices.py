@@ -75,6 +75,23 @@ def test_compare_tickers_side_by_side(registry: ToolRegistry) -> None:
     assert result["as_of"] == "2026-06-30"
 
 
+def test_compare_tickers_reports_news_coverage(registry: ToolRegistry) -> None:
+    data = registry.call("compare_tickers", {"tickers": ["NVDA", "AMD"], "days": 7})["data"]
+
+    rows = {r["ticker"]: r for r in data["tickers"]}
+    assert rows["NVDA"]["news_coverage"] == {
+        "days": 7,
+        "days_with_articles": 7,
+        "complete_days": 5,
+        "capped_days": ["2026-06-29"],
+        "incomplete_days": ["2026-06-30"],
+        "complete": False,
+    }
+    assert rows["AMD"]["news_coverage"]["complete"] is True
+    assert [w.split(":")[0] for w in data["warnings"]] == ["NVDA", "NVDA"]
+    assert "1 of 7 days were not fully fetched (2026-06-30)" in data["warnings"][0]
+
+
 def test_compare_tickers_cites_articles_per_ticker(registry: ToolRegistry) -> None:
     sources = registry.call("compare_tickers", {"tickers": ["NVDA", "AMD"], "days": 7})["sources"]
     assert {s["ticker"] for s in sources} == {"NVDA"}  # AMD has no news in the window

@@ -55,6 +55,15 @@ def test_select_returns_rows(registry: ToolRegistry) -> None:
     assert result["as_of"] == "2026-06-30"
 
 
+def test_fetch_log_is_readable(registry: ToolRegistry) -> None:
+    result = registry.call(
+        "run_sql",
+        {"query": "SELECT status, count(*) FROM fetch_log WHERE symbol = 'NVDA' GROUP BY 1 "
+                  "ORDER BY 1"},
+    )  # fmt: skip
+    assert result["data"]["rows"] == [["capped", 1], ["complete", 27], ["provisional", 1]]
+
+
 def test_realistic_agent_query_is_allowed(registry: ToolRegistry) -> None:
     query = """
         WITH daily AS (
@@ -204,6 +213,7 @@ def test_role_and_read_only_transaction_block_writes(
         "DELETE FROM articles",
         "UPDATE tickers SET company_name = 'x'",
         "INSERT INTO daily_prices VALUES ('NVDA', '2030-01-01', 1, 1, 1, 1, 1)",
+        "DELETE FROM fetch_log",
         "TRUNCATE articles",
         "DROP TABLE articles",
     ],

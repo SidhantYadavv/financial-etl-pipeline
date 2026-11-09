@@ -17,9 +17,14 @@ SENTIMENT_MODEL = "vader"
 NEWS_DATE = f"(a.published_at AT TIME ZONE '{MARKET_TZ}')::date"
 NO_DATA_HINT = "Run `python -m pipeline backfill` to load data."
 SAMPLE_CAVEAT = (
-    "Article counts are a sample of coverage (the news API returns at most 100 articles "
-    "per request), not total news volume, so do not read busy or quiet days as news flow."
+    "News is fetched one day at a time and the news API returns at most 100 articles per "
+    "day, so article counts are a sample of coverage, not news volume. `coverage` says how "
+    "many days in the period were fully fetched; when `warnings` is not empty, tell the "
+    "user the result rests on incomplete days."
 )
+# fetch_log statuses (see migration 0004); days without a row were never fetched.
+INCOMPLETE_STATUSES = ("not_fetched", "provisional")
+MAX_LISTED_DAYS = 10
 
 _COMPANY_SUFFIX = re.compile(
     r"^the\s+|,?\s+(inc|corp|corporation|company|co|group|platforms)\.?$|\s+&\s+co\.?$",
@@ -122,6 +127,69 @@ def article_source(row: Any) -> dict[str, Any]:
         "published_at": row.published_at,
         "url": row.url,
     }
+
+
+def news_coverage(
+    conn: Connection, symbol: str, start: date, end: date
+) -> tuple[dict[date, str], dict[str, Any]]:
+    """Fetch status of each day in start..end, and a summary of how complete they are."""
+    window = {"symbol": symbol, "start": start, "end": end}
+    logged = dict(
+        conn.execute(
+            text(
+                "SELECT day, status FROM fetch_log "
+                "WHERE symbol = :symbol AND day BETWEEN :start AND :end"
+            ),
+            window,
+        ).all()
+    )
+    days_with_articles = conn.execute(
+        text(
+            f"""
+            SELECT count(DISTINCT {NEWS_DATE}) FROM articles a
+            JOIN article_tickers t ON t.article_id = a.id AND t.symbol = :symbol
+            WHERE {news_window_sql()}
+            """
+        ),
+        window,
+    ).scalar_one()
+    days = [start + timedelta(days=i) for i in range((end - start).days + 1)]
+    statuses = {d: logged.get(d, "not_fetched") for d in days}
+    incomplete = [d for d in days if statuses[d] in INCOMPLETE_STATUSES]
+    summary = {
+        "days": len(days),
+        "days_with_articles": days_with_articles,
+        "complete_days": sum(s == "complete" for s in statuses.values()),
+        "capped_days": [d for d in days if statuses[d] == "capped"],
+        "incomplete_days": incomplete,
+        "complete": not incomplete,
+    }
+    return statuses, summary
+
+
+def coverage_warnings(symbol: str, coverage: dict[str, Any]) -> list[str]:
+    """Plain-language caveats the model should pass on to the user."""
+    warnings = []
+    incomplete = coverage["incomplete_days"]
+    if incomplete:
+        warnings.append(
+            f"{symbol}: {len(incomplete)} of {coverage['days']} days were not fully fetched "
+            f"({_list_days(incomplete)}), so this result rests on incomplete days; "
+            "treat any trend as tentative."
+        )
+    capped = coverage["capped_days"]
+    if capped:
+        warnings.append(
+            f"{symbol}: {len(capped)} days hit the 100-article limit ({_list_days(capped)}); "
+            "those days are a sample of the latest articles that day."
+        )
+    return warnings
+
+
+def _list_days(days: list[date]) -> str:
+    listed = ", ".join(d.isoformat() for d in days[:MAX_LISTED_DAYS])
+    more = len(days) - MAX_LISTED_DAYS
+    return f"{listed} and {more} more" if more > 0 else listed
 
 
 def pct_change(start: float, end: float) -> float | None:

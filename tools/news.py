@@ -13,7 +13,9 @@ from tools.common import (
     all_tickers,
     article_source,
     calendar_window,
+    coverage_warnings,
     engine,
+    news_coverage,
     news_date_range,
     news_window_sql,
     price_date_range,
@@ -214,6 +216,7 @@ def sentiment_trend(params: SentimentTrendInput) -> ToolResult:
             ),
             window,
         ).all()
+        fetch_status, coverage = news_coverage(conn, symbol, start, end)
 
     if not daily:
         raise ToolError(
@@ -229,6 +232,7 @@ def sentiment_trend(params: SentimentTrendInput) -> ToolResult:
             "articles": by_day[d].articles if d in by_day else 0,
             "positive": by_day[d].positive if d in by_day else 0,
             "negative": by_day[d].negative if d in by_day else 0,
+            "fetch": fetch_status[d],
         }
         for d in days
     ]
@@ -248,6 +252,8 @@ def sentiment_trend(params: SentimentTrendInput) -> ToolResult:
             "second_half_avg": second_half,
             "change": change,
             "direction": _direction(change),
+            "coverage": coverage,
+            "warnings": coverage_warnings(symbol, coverage),
             "daily": series,
         },
         as_of=latest,
@@ -317,8 +323,10 @@ SENTIMENT_TREND = Tool(
         "compares the average of the first half of the period with the second half: "
         "`change` > 0 means sentiment is improving, and `direction` labels it "
         f"improving/worsening/flat (threshold {TREND_THRESHOLD}). Days without articles have "
-        "avg_sentiment null. `sources` lists the most positive and most negative articles "
-        "in the period so you can cite what drove the trend. " + SAMPLE_CAVEAT
+        "avg_sentiment null. Each day's `fetch` is complete, capped (hit the 100-article "
+        "limit), provisional (fetched before all articles were available) or not_fetched. "
+        "`sources` lists the most positive and most negative articles in the period so you "
+        "can cite what drove the trend. " + SAMPLE_CAVEAT
     ),
     input_model=SentimentTrendInput,
     fn=sentiment_trend,

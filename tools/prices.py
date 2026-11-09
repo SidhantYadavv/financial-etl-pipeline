@@ -10,7 +10,9 @@ from tools.common import (
     SENTIMENT_MODEL,
     article_source,
     calendar_window,
+    coverage_warnings,
     engine,
+    news_coverage,
     news_window_sql,
     pct_change,
     price_date_range,
@@ -122,11 +124,14 @@ def compare_tickers(params: CompareTickersInput) -> ToolResult:
             raise ToolError(f"Tickers must be different; they resolved to {', '.join(symbols)}.")
         _, latest = price_date_range(conn)
         start, end = calendar_window(latest, params.days)
-        rows, sources = [], []
+        rows, sources, warnings = [], [], []
         for symbol in symbols:
             row, notable = _compare_one(conn, symbol, start, end)
+            _, coverage = news_coverage(conn, symbol, start, end)
+            row["news_coverage"] = coverage
             rows.append(row)
             sources.extend(notable)
+            warnings.extend(coverage_warnings(symbol, coverage))
 
     if all(r["price_change_pct"] is None and r["articles"] == 0 for r in rows):
         raise ToolError(f"No prices or news for {', '.join(symbols)} between {start} and {end}.")
@@ -139,6 +144,7 @@ def compare_tickers(params: CompareTickersInput) -> ToolResult:
             "best_price_change": _leader(rows, "price_change_pct"),
             "most_positive_sentiment": _leader(rows, "avg_sentiment"),
             "most_articles": _leader(rows, "articles"),
+            "warnings": warnings,
         },
         as_of=latest,
         sources=sources,
@@ -231,7 +237,8 @@ COMPARE_TICKERS = Tool(
         "sentiment and number of articles. The window is `days` CALENDAR days ending at the "
         "latest price date, applied to both prices and news so they line up; news published "
         "after the last completed session is not counted. Price change runs from the close "
-        "before the window to the last close in it. `sources` holds each ticker's most "
+        "before the window to the last close in it. Each ticker's `news_coverage` says how "
+        "many days of its news were fully fetched. `sources` holds each ticker's most "
         "positive and most negative article in the window. " + SAMPLE_CAVEAT
     ),
     input_model=CompareTickersInput,

@@ -1,4 +1,4 @@
-"""run_sql: read-only SQL over the five data tables, with layered defenses.
+"""run_sql: read-only SQL over the data tables, with layered defenses.
 
 1. Parse with Postgres' own grammar (pglast) and accept exactly one SELECT that only
    reads allowlisted tables and calls allowlisted functions. System catalogs are
@@ -24,7 +24,9 @@ from tools.registry import Tool, ToolError, ToolResult
 
 MAX_ROWS = 200
 MAX_QUERY_CHARS = 5000
-ALLOWED_TABLES = frozenset({"tickers", "articles", "article_tickers", "sentiment", "daily_prices"})
+ALLOWED_TABLES = frozenset(
+    {"tickers", "articles", "article_tickers", "sentiment", "daily_prices", "fetch_log"}
+)
 ALLOWED_FUNCTIONS = frozenset(
     {
         # aggregates
@@ -184,7 +186,9 @@ RUN_SQL = Tool(
         "articles(id, url, title, description, source, published_at timestamptz, fetched_at); "
         "article_tickers(article_id, symbol); "
         "sentiment(article_id, model, score float -1..1, label); "
-        "daily_prices(symbol, date, open, high, low, close, volume). "
+        "daily_prices(symbol, date, open, high, low, close, volume); "
+        "fetch_log(symbol, day, status complete|capped|provisional, articles_returned): "
+        "one row per ticker and New York day of news fetched, no row = not fetched. "
         "Join articles to tickers through article_tickers. Only these tables and common "
         "aggregate/window/math/date/text functions are allowed; no writes, no system tables. "
         f"Results are capped at {MAX_ROWS} rows (truncated=true if there were more) and "
