@@ -7,12 +7,33 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from functools import cache
 from typing import Any
+from urllib.parse import urlparse
 
 from nltk.sentiment.vader import SentimentIntensityAnalyzer
 
 logger = logging.getLogger(__name__)
 
 SENTIMENT_MODEL = "vader"
+
+# A passing mention in the description ("...with an Nvidia RTX GPU") is not news about
+# the company; a title mention or repeated description mentions are.
+MIN_DESCRIPTION_MENTIONS = 2
+
+# Deal/coupon sites and package indexes: product listings, not company news. Matched
+# against the NewsAPI source name and the article's host.
+BLOCKED_SOURCES = frozenset(
+    {
+        "slickdeals.net",
+        "dealnews.com",
+        "dealcatcher.com",
+        "dansdeals.com",
+        "bensbargains.com",
+        "bradsdeals.com",
+        "techbargains.com",
+        "9to5toys.com",
+        "pypi.org",
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -41,8 +62,25 @@ def compile_alias_patterns(
     return patterns
 
 
-def match_tickers(text: str, patterns: Mapping[str, re.Pattern[str]]) -> set[str]:
-    return {symbol for symbol, pattern in patterns.items() if pattern.search(text)}
+def match_tickers(
+    title: str, description: str | None, patterns: Mapping[str, re.Pattern[str]]
+) -> set[str]:
+    """Symbols named in the title, or at least twice in the description."""
+    return {
+        symbol
+        for symbol, pattern in patterns.items()
+        if pattern.search(title)
+        or len(pattern.findall(description or "")) >= MIN_DESCRIPTION_MENTIONS
+    }
+
+
+def is_blocked_source(source: str | None, url: str) -> bool:
+    host = (urlparse(url).hostname or "").casefold().removeprefix("www.")
+    name = (source or "").casefold().removeprefix("www.")
+    names = {name, f"{name}.com"}
+    return bool(names & BLOCKED_SOURCES) or any(
+        host == domain or host.endswith(f".{domain}") for domain in BLOCKED_SOURCES
+    )
 
 
 @cache
@@ -68,11 +106,11 @@ def transform_articles(
     raw_articles: Iterable[Mapping[str, Any]],
     aliases_by_symbol: Mapping[str, Iterable[str]],
 ) -> list[CleanArticle]:
-    """Drop incomplete or duplicate articles and those that mention no tracked ticker."""
+    """Drop incomplete, duplicate and blocked-source articles and those about no ticker."""
     patterns = compile_alias_patterns(aliases_by_symbol)
     seen_urls: set[str] = set()
     cleaned: list[CleanArticle] = []
-    dropped = unmatched = 0
+    dropped = blocked = unmatched = 0
 
     for raw in raw_articles:
         url = _clean_text(raw.get("url"))
@@ -85,22 +123,26 @@ def transform_articles(
         if url in seen_urls:
             continue
 
+        source = raw.get("source")
+        source_name = _clean_text(source.get("name")) if isinstance(source, dict) else None
+        if is_blocked_source(source_name, url):
+            blocked += 1
+            continue
+
         description = _clean_text(raw.get("description"))
-        text = f"{title}. {description}" if description else title
-        symbols = match_tickers(text, patterns)
+        symbols = match_tickers(title, description, patterns)
         if not symbols:
             unmatched += 1
             continue
 
         seen_urls.add(url)
-        score, label = score_sentiment(text)
-        source = raw.get("source")
+        score, label = score_sentiment(f"{title}. {description}" if description else title)
         cleaned.append(
             CleanArticle(
                 url=url,
                 title=title,
                 description=description,
-                source=_clean_text(source.get("name")) if isinstance(source, dict) else None,
+                source=source_name,
                 published_at=published_at,
                 symbols=frozenset(symbols),
                 sentiment_score=score,
@@ -109,9 +151,11 @@ def transform_articles(
         )
 
     logger.info(
-        "Transform: %d articles kept, %d incomplete, %d without a ticker match",
+        "Transform: %d articles kept, %d incomplete, %d from blocked sources, "
+        "%d without a ticker match",
         len(cleaned),
         dropped,
+        blocked,
         unmatched,
     )
     return cleaned
