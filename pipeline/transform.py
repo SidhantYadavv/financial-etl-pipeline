@@ -11,6 +11,8 @@ from urllib.parse import urlparse
 
 from nltk.sentiment.vader import SentimentIntensityAnalyzer
 
+from pipeline.config import BLOCKED_SOURCES
+
 logger = logging.getLogger(__name__)
 
 SENTIMENT_MODEL = "vader"
@@ -18,22 +20,6 @@ SENTIMENT_MODEL = "vader"
 # A passing mention in the description ("...with an Nvidia RTX GPU") is not news about
 # the company; a title mention or repeated description mentions are.
 MIN_DESCRIPTION_MENTIONS = 2
-
-# Deal/coupon sites and package indexes: product listings, not company news. Matched
-# against the NewsAPI source name and the article's host.
-BLOCKED_SOURCES = frozenset(
-    {
-        "slickdeals.net",
-        "dealnews.com",
-        "dealcatcher.com",
-        "dansdeals.com",
-        "bensbargains.com",
-        "bradsdeals.com",
-        "techbargains.com",
-        "9to5toys.com",
-        "pypi.org",
-    }
-)
 
 
 @dataclass(frozen=True)
@@ -63,15 +49,24 @@ def compile_alias_patterns(
 
 
 def match_tickers(
-    title: str, description: str | None, patterns: Mapping[str, re.Pattern[str]]
+    title: str,
+    description: str | None,
+    patterns: Mapping[str, re.Pattern[str]],
+    title_patterns: Mapping[str, re.Pattern[str]] | None = None,
 ) -> set[str]:
-    """Symbols named in the title, or at least twice in the description."""
-    return {
+    """Symbols named in the title, or at least twice in the description.
+
+    `title_patterns` (CEO names) only count in the title: a description that quotes
+    a CEO is often about something else.
+    """
+    matched = {
         symbol
         for symbol, pattern in patterns.items()
         if pattern.search(title)
         or len(pattern.findall(description or "")) >= MIN_DESCRIPTION_MENTIONS
     }
+    matched |= {s for s, pattern in (title_patterns or {}).items() if pattern.search(title)}
+    return matched
 
 
 def is_blocked_source(source: str | None, url: str) -> bool:
@@ -105,9 +100,11 @@ def score_sentiment(text: str) -> tuple[float, str]:
 def transform_articles(
     raw_articles: Iterable[Mapping[str, Any]],
     aliases_by_symbol: Mapping[str, Iterable[str]],
+    title_aliases_by_symbol: Mapping[str, Iterable[str]] | None = None,
 ) -> list[CleanArticle]:
     """Drop incomplete, duplicate and blocked-source articles and those about no ticker."""
     patterns = compile_alias_patterns(aliases_by_symbol)
+    title_patterns = compile_alias_patterns(title_aliases_by_symbol or {})
     seen_urls: set[str] = set()
     cleaned: list[CleanArticle] = []
     dropped = blocked = unmatched = 0
@@ -130,7 +127,7 @@ def transform_articles(
             continue
 
         description = _clean_text(raw.get("description"))
-        symbols = match_tickers(title, description, patterns)
+        symbols = match_tickers(title, description, patterns, title_patterns)
         if not symbols:
             unmatched += 1
             continue

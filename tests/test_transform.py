@@ -129,6 +129,38 @@ def test_deal_listings_are_dropped_even_with_the_ticker_in_the_title() -> None:
     ]
 
 
+CEOS = {"NVDA": ["Jensen Huang"], "JPM": ["Jamie Dimon"], "AMD": ["Lisa Su"]}
+CEO_PATTERNS = compile_alias_patterns(CEOS)
+
+
+@pytest.mark.parametrize(
+    ("title", "expected"),
+    [
+        ("Jamie Dimon ignores the noise", {"JPM"}),
+        ("Jensen Huang's keynote: what to expect", {"NVDA"}),
+        ("AMD’s Lisa Su says the market is short-sighted about AI", {"AMD"}),
+        ("Lisa Sutton joins the board of a regional bank", set()),  # whole words only
+        ("Jensen Huang and Lisa Su share a stage", {"NVDA", "AMD"}),
+    ],
+)
+def test_ceo_names_match_in_titles(title: str, expected: set[str]) -> None:
+    assert match_tickers(title, None, {}, CEO_PATTERNS) == expected
+
+
+def test_ceo_names_never_count_in_descriptions() -> None:
+    description = "Jensen Huang spoke first. Later, Jensen Huang took questions."
+    assert match_tickers("Conference roundup", description, {}, CEO_PATTERNS) == set()
+
+
+def test_transform_links_ceo_headlines() -> None:
+    raw = [
+        news_article("Jamie Dimon ignores the noise", "https://x/1", "JPMorgan Chase CEO says"),
+        news_article("Bank outlook", "https://x/2", "Jamie Dimon said rates... Jamie Dimon"),
+    ]
+    articles = transform_articles(raw, ALIASES, CEOS)
+    assert [(a.url, a.symbols) for a in articles] == [("https://x/1", frozenset({"JPM"}))]
+
+
 def test_sentiment_labels() -> None:
     assert score_sentiment("Profits soar to a record, a great win")[1] == "positive"
     assert score_sentiment("Shares crash amid fraud scandal and losses")[1] == "negative"

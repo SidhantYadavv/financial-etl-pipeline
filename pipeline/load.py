@@ -48,6 +48,16 @@ def load_tickers_conn(conn: Connection) -> dict[str, list[str]]:
     return {symbol: list(aliases) for symbol, aliases in rows}
 
 
+def load_title_aliases(engine: Engine) -> dict[str, list[str]]:
+    with engine.connect() as conn:
+        return load_title_aliases_conn(conn)
+
+
+def load_title_aliases_conn(conn: Connection) -> dict[str, list[str]]:
+    rows = conn.execute(select(Ticker.symbol, Ticker.title_aliases).order_by(Ticker.symbol))
+    return {symbol: list(names) for symbol, names in rows if names}
+
+
 def load(
     engine: Engine,
     articles: Sequence[CleanArticle],
@@ -147,17 +157,19 @@ class RematchStats:
     articles: int = 0
     links_before: int = 0
     links_removed: int = 0
+    links_added: int = 0
 
 
 def rematch_articles(engine: Engine) -> RematchStats:
     """Re-apply the current matching rules and source blocklist to stored articles.
 
-    Only removes ticker links: articles and their sentiment stay, so the links can be
-    rebuilt from the stored text if the rules change again.
+    Adds and removes ticker links only: articles and their sentiment stay, so the links
+    can be rebuilt from the stored text whenever the rules change.
     """
     stats = RematchStats()
     with engine.begin() as conn:
         patterns = compile_alias_patterns(load_tickers_conn(conn))
+        title_patterns = compile_alias_patterns(load_title_aliases_conn(conn))
         links: dict[int, set[str]] = {}
         for article_id, symbol in conn.execute(
             select(ArticleTicker.article_id, ArticleTicker.symbol)
@@ -166,6 +178,7 @@ def rematch_articles(engine: Engine) -> RematchStats:
         stats.links_before = sum(len(s) for s in links.values())
 
         stale: list[tuple[int, str]] = []
+        new: list[tuple[int, str]] = []
         rows = conn.execute(
             select(Article.id, Article.title, Article.description, Article.source, Article.url)
         )
@@ -174,9 +187,11 @@ def rematch_articles(engine: Engine) -> RematchStats:
             keep = (
                 set()
                 if is_blocked_source(source, url)
-                else match_tickers(title, description, patterns)
+                else match_tickers(title, description, patterns, title_patterns)
             )
-            stale.extend((article_id, s) for s in links.get(article_id, set()) - keep)
+            current = links.get(article_id, set())
+            stale.extend((article_id, s) for s in current - keep)
+            new.extend((article_id, s) for s in sorted(keep - current))
 
         for start in range(0, len(stale), CHUNK_SIZE):
             chunk = stale[start : start + CHUNK_SIZE]
@@ -186,5 +201,8 @@ def rematch_articles(engine: Engine) -> RematchStats:
                 )
             )
         stats.links_removed = len(stale)
+        stats.links_added = _insert_ignore(
+            conn, ArticleTicker, [{"article_id": a, "symbol": s} for a, s in new]
+        )
     logger.info("Rematch: %s", stats)
     return stats

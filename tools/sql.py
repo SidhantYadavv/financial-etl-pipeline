@@ -182,7 +182,7 @@ RUN_SQL = Tool(
     name="run_sql",
     description=(
         "Run one read-only PostgreSQL SELECT for questions the other tools cannot answer. "
-        "Tables: tickers(symbol, company_name, aliases text[]); "
+        "Tables: tickers(symbol, company_name, aliases text[], title_aliases text[]); "
         "articles(id, url, title, description, source, published_at timestamptz, fetched_at); "
         "article_tickers(article_id, symbol); "
         "sentiment(article_id, model, score float -1..1, label); "

@@ -91,8 +91,12 @@ makes. A run that stops early (budget, rate limit, crash) leaves the rest for th
 requests a day, an empty database fills in about a week.
 
 An article is linked to a ticker only if a company alias (name or symbol) appears in its title,
-or at least twice in its description. Deal and coupon sites (Slickdeals and similar) and PyPI
-release notes are skipped (`BLOCKED_SOURCES` in `pipeline/transform.py`).
+or at least twice in its description. CEO names (`tickers.title_aliases`, e.g. Jensen Huang →
+NVDA) count in titles only; names that often mean something else, such as Elon Musk, are left out.
+Deal and coupon sites (Slickdeals and similar) and PyPI release notes are excluded in the NewsAPI
+request itself, so they don't use up the 100-article page, and are dropped again in transform as a
+backstop (`BLOCKED_SOURCES` in `pipeline/config.py`). After changing aliases, run
+`python -m pipeline rematch` to re-link stored articles.
 
 ### Agent tools
 Seven tools the research agent will call: `list_tickers`, `search_news`, `sentiment_trend`,

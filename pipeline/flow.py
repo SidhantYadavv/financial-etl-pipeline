@@ -16,7 +16,7 @@ from db.session import get_engine
 from pipeline.config import Settings
 from pipeline.coverage import is_settled, plan_gap_fill, read_statuses
 from pipeline.extract import NewsRequest, NewsResult, PriceBar, fetch_news, fetch_prices
-from pipeline.load import LoadStats, load, load_tickers
+from pipeline.load import LoadStats, load, load_tickers, load_title_aliases
 from pipeline.transform import CleanArticle, transform_articles
 
 Mode = Literal["daily", "backfill"]
@@ -35,6 +35,11 @@ class NewsPlan:
 @task(name="Load tickers", cache_policy=NO_CACHE)
 def load_tickers_task(database_url: str) -> dict[str, list[str]]:
     return load_tickers(get_engine(database_url))
+
+
+@task(name="Load title aliases", cache_policy=NO_CACHE)
+def load_title_aliases_task(database_url: str) -> dict[str, list[str]]:
+    return load_title_aliases(get_engine(database_url))
 
 
 @task(name="Plan news requests", cache_policy=NO_CACHE)
@@ -60,8 +65,12 @@ def extract_prices_task(symbols: list[str], price_days: int, now: datetime) -> l
 
 
 @task(name="Transform", cache_policy=NO_CACHE)
-def transform_task(news: NewsResult, aliases_by_symbol: dict[str, list[str]]) -> list[CleanArticle]:
-    return transform_articles(news.articles, aliases_by_symbol)
+def transform_task(
+    news: NewsResult,
+    aliases_by_symbol: dict[str, list[str]],
+    title_aliases_by_symbol: dict[str, list[str]],
+) -> list[CleanArticle]:
+    return transform_articles(news.articles, aliases_by_symbol, title_aliases_by_symbol)
 
 
 @task(name="Load", cache_policy=NO_CACHE)
@@ -89,7 +98,8 @@ def etl_flow(mode: Mode = "daily") -> dict[str, Any]:
     plan = plan_news_task(settings.database_url, symbols, settings.request_budget, now)
     news = extract_news_task(aliases_by_symbol, plan, settings)
     prices = extract_prices_task(symbols, PRICE_DAYS[mode], now)
-    articles = transform_task(news, aliases_by_symbol)
+    title_aliases = load_title_aliases_task(settings.database_url)
+    articles = transform_task(news, aliases_by_symbol, title_aliases)
     stats = load_task(settings.database_url, articles, prices, news, now)
 
     # Still to fetch: beyond this run's budget, refused or failed, or fetched too early.

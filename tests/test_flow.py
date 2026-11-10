@@ -42,6 +42,7 @@ class FakeNewsApi:
         self.calls: list[tuple[str, date]] = []
         self.rate_limit_after = rate_limit_after
         self.capped_symbol = "Nvidia"
+        self.extra: list[dict[str, Any]] = []
 
     def get(self, url: str, params: dict[str, Any], **kwargs: Any) -> FakeResponse:
         if self.rate_limit_after is not None and len(self.calls) >= self.rate_limit_after:
@@ -58,7 +59,8 @@ class FakeNewsApi:
         shared = news_article("Nvidia and Apple lead tech rally", "https://news.test/shared")
         total = 250 if first_alias == self.capped_symbol else 2
         return FakeResponse(
-            200, {"status": "ok", "totalResults": total, "articles": [unique, shared]}
+            200,
+            {"status": "ok", "totalResults": total, "articles": [unique, shared, *self.extra]},
         )
 
 
@@ -149,6 +151,28 @@ def test_rate_limited_run_logs_only_what_it_fetched(
     assert len(resumed) == 10
     assert not set(api.calls[:12]) & set(resumed)
     assert len(fetch_log(env)) == 22
+
+
+def test_ceo_headlines_are_linked_by_the_flow(
+    env: Engine, api: FakeNewsApi, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("NEWS_API_REQUEST_BUDGET", "1")
+    api.extra = [news_article("Jensen Huang's keynote recap", "https://news.test/keynote")]
+
+    etl_flow(mode="daily")
+
+    with env.connect() as conn:
+        symbols = (
+            conn.execute(
+                text(
+                    "SELECT t.symbol FROM article_tickers t JOIN articles a ON a.id = t.article_id "
+                    "WHERE a.url = 'https://news.test/keynote'"
+                )
+            )
+            .scalars()
+            .all()
+        )
+    assert symbols == ["NVDA"]
 
 
 def test_capped_and_provisional_days_are_recorded(env: Engine, api: FakeNewsApi) -> None:

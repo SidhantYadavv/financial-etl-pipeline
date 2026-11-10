@@ -17,7 +17,7 @@ from pipeline.coverage import (
     record_fetches,
 )
 from pipeline.extract import NEWS_API_MAX_DAYS, FetchedWindow, NewsRequest
-from pipeline.load import load, rematch_articles
+from pipeline.load import load, load_title_aliases, rematch_articles
 from pipeline.transform import CleanArticle
 from tests.conftest import count_rows
 
@@ -203,6 +203,7 @@ def test_rematch_removes_links_the_new_rules_reject(db: Engine) -> None:
     stats = rematch_articles(db)
 
     assert (stats.articles, stats.links_before, stats.links_removed) == (3, 7, 5)
+    assert stats.links_added == 0
     with db.connect() as conn:
         links = conn.execute(
             text(
@@ -213,4 +214,49 @@ def test_rematch_removes_links_the_new_rules_reject(db: Engine) -> None:
     assert [tuple(r) for r in links] == [("Notebookcheck.net", ["AAPL"]), ("Reuters", ["NVDA"])]
     after = count_rows(db)
     assert after["articles"] == before["articles"]  # articles and sentiment are kept
-    assert rematch_articles(db).links_removed == 0  # idempotent
+    again = rematch_articles(db)
+    assert (again.links_removed, again.links_added) == (0, 0)  # idempotent
+
+
+DIMON = (
+    "Jamie Dimon Ignores the Noise, While Hermès Seeks Suburban Wealth",
+    "Criticism in the press doesn't change what's right, JPMorgan Chase CEO says.",
+    "Biztoc.com",
+    "2026-11-02T15:00:00Z",
+    [],
+)
+MUSK = (
+    "Elon Musk Pours $276 Million Into Political Donations For Republicans In Midterms",
+    "The Tesla and SpaceX CEO is a huge donor in the midterm elections.",
+    "Biztoc.com",
+    "2026-11-02T15:00:00Z",
+    [],
+)
+
+
+def test_rematch_adds_links_for_ceo_headlines(db: Engine) -> None:
+    _seed_articles(db, [DIMON, MUSK])
+
+    stats = rematch_articles(db)
+
+    assert (stats.links_added, stats.links_removed) == (1, 0)
+    with db.connect() as conn:
+        links = conn.execute(
+            text(
+                "SELECT a.title, t.symbol FROM article_tickers t "
+                "JOIN articles a ON a.id = t.article_id"
+            )
+        ).all()
+    assert [(title[:11], symbol) for title, symbol in links] == [("Jamie Dimon", "JPM")]
+    assert rematch_articles(db).links_added == 0
+
+
+def test_seeded_title_aliases_skip_ambiguous_names(db: Engine) -> None:
+    title_aliases = load_title_aliases(db)
+
+    assert title_aliases["NVDA"] == ["Jensen Huang"]
+    assert title_aliases["JPM"] == ["Jamie Dimon"]
+    assert "John Ternus" in title_aliases["AAPL"]
+    assert {"TSLA", "GS", "CVX"}.isdisjoint(title_aliases)  # Elon Musk etc. are ambiguous
+    assert "Greg Peters" not in title_aliases["NFLX"]
+    assert len(title_aliases) == 17

@@ -31,6 +31,8 @@ class Ticker(Base):
     symbol: Mapped[str] = mapped_column(String(10), primary_key=True)
     company_name: Mapped[str] = mapped_column(Text)
     aliases: Mapped[list[str]] = mapped_column(ARRAY(Text), server_default="{}")
+    # Matched in headlines only, e.g. CEO names ("Jensen Huang" -> NVDA).
+    title_aliases: Mapped[list[str]] = mapped_column(ARRAY(Text), server_default="{}")
 
 
 class Article(Base):
