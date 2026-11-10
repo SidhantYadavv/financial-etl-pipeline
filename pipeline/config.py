@@ -9,6 +9,23 @@ from db.session import database_url
 
 DEFAULT_REQUEST_BUDGET = 80
 
+# Deal/coupon sites and package indexes: product listings, not company news. Sent to
+# NewsAPI as excludeDomains so they do not use up the 100-article page, and checked
+# again in transform (source name and host) in case NewsAPI lets one through.
+BLOCKED_SOURCES = frozenset(
+    {
+        "slickdeals.net",
+        "dealnews.com",
+        "dealcatcher.com",
+        "dansdeals.com",
+        "bensbargains.com",
+        "bradsdeals.com",
+        "techbargains.com",
+        "9to5toys.com",
+        "pypi.org",
+    }
+)
+
 
 @dataclass(frozen=True)
 class Settings:

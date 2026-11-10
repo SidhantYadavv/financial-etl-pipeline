@@ -6,6 +6,7 @@ import pytest
 import requests
 
 from pipeline import extract
+from pipeline.config import BLOCKED_SOURCES
 from pipeline.extract import (
     FetchedWindow,
     NewsRequest,
@@ -99,6 +100,16 @@ def test_fetch_news_collects_articles_and_sends_key_in_header(api: FakeNewsApi) 
     # 2026-11-02 in New York, in UTC, with an inclusive `to`.
     assert api.calls[0]["params"]["from"] == "2026-11-02T05:00:00"
     assert api.calls[0]["params"]["to"] == "2026-11-03T04:59:59"
+
+
+def test_blocked_domains_are_excluded_at_the_source(api: FakeNewsApi) -> None:
+    api.responses.append(FakeResponse(200, {"status": "ok", "articles": []}))
+
+    fetch_news(_plan(1)[:1], ALIASES, "key", budget=1)
+
+    excluded = api.calls[0]["params"]["excludeDomains"].split(",")
+    assert set(excluded) == BLOCKED_SOURCES
+    assert {"slickdeals.net", "dealnews.com", "pypi.org"} <= set(excluded)
 
 
 def test_fetch_news_records_what_each_window_returned(api: FakeNewsApi) -> None:

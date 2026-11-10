@@ -10,12 +10,15 @@ import pandas as pd
 import requests
 import yfinance as yf
 
+from pipeline.config import BLOCKED_SOURCES
+
 logger = logging.getLogger(__name__)
 
 NEWS_API_URL = "https://newsapi.org/v2/everything"
 NEWS_API_PAGE_SIZE = 100  # free tier returns at most 100 results per query
 NEWS_API_MAX_DAYS = 29  # free tier only serves the last month; stay clear of the edge
 MARKET_TZ = ZoneInfo("America/New_York")
+EXCLUDE_DOMAINS = ",".join(sorted(BLOCKED_SOURCES))
 
 
 @dataclass(frozen=True)
@@ -98,6 +101,7 @@ def fetch_news(
                 params={
                     "q": build_query(aliases_by_symbol[req.symbol]),
                     "searchIn": "title,description",
+                    "excludeDomains": EXCLUDE_DOMAINS,
                     "from": _isoformat(req.start),
                     # `to` is inclusive; stop one second before the next day starts.
                     "to": _isoformat(req.end - timedelta(seconds=1)),
